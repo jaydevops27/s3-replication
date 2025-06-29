@@ -216,10 +216,10 @@ class S3Replicator:
 
 def main():
     # Configuration - these should be set via environment variables in GitLab
-    SOURCE_BUCKET = os.getenv('SOURCE_BUCKET', 'cert-9898')
-    DEST_BUCKET = os.getenv('DEST_BUCKET', 'iteration-technology')
-    SOURCE_REGION = os.getenv('SOURCE_REGION', 'us-east-1')
-    DEST_REGION = os.getenv('DEST_REGION', 'ca-central-1')
+    SOURCE_BUCKET = os.getenv('SOURCE_BUCKET', 'source-bucket-name')
+    DEST_BUCKET = os.getenv('DEST_BUCKET', 'desctination-bucket-name')
+    SOURCE_REGION = os.getenv('SOURCE_REGION', 'source-region')
+    DEST_REGION = os.getenv('DEST_REGION', 'destination-region')
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', '10'))
     DRY_RUN = os.getenv('DRY_RUN', 'false').lower() == 'true'
     
