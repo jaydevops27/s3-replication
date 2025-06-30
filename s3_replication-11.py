@@ -22,13 +22,15 @@ class S3Replicator:
     def __init__(self, 
                  source_bucket: str, 
                  dest_bucket: str,
+                 source_region: str = None,
+                 dest_region: str = None,
                  aws_access_key: Optional[str] = None,
                  aws_secret_key: Optional[str] = None):
         
         self.source_bucket = source_bucket
         self.dest_bucket = dest_bucket
         
-        # Create session like AWS CLI does
+        # Create session
         if aws_access_key and aws_secret_key:
             self.session = boto3.Session(
                 aws_access_key_id=aws_access_key,
@@ -37,27 +39,96 @@ class S3Replicator:
         else:
             self.session = boto3.Session()  # Use default credential chain
         
+        # Set regions (try auto-detect if not provided, fallback to defaults)
+        self.source_region = source_region
+        self.dest_region = dest_region
+        
+        if not self.source_region or not self.dest_region:
+            logger.info("Attempting to auto-detect bucket regions...")
+            try:
+                s3_default = self.session.client('s3')
+                
+                if not self.source_region:
+                    try:
+                        source_location = s3_default.get_bucket_location(Bucket=source_bucket)
+                        self.source_region = source_location.get('LocationConstraint') or 'us-east-1'
+                        logger.info(f"Auto-detected source region: {self.source_region}")
+                    except ClientError as e:
+                        logger.warning(f"Cannot auto-detect source region: {e}")
+                        self.source_region = 'us-east-1'  # Default fallback
+                        logger.info(f"Using default source region: {self.source_region}")
+                
+                if not self.dest_region:
+                    try:
+                        dest_location = s3_default.get_bucket_location(Bucket=dest_bucket)
+                        self.dest_region = dest_location.get('LocationConstraint') or 'us-east-1'
+                        logger.info(f"Auto-detected destination region: {self.dest_region}")
+                    except ClientError as e:
+                        logger.warning(f"Cannot auto-detect destination region: {e}")
+                        self.dest_region = 'us-east-1'  # Default fallback
+                        logger.info(f"Using default destination region: {self.dest_region}")
+                        
+            except Exception as e:
+                logger.warning(f"Region auto-detection failed: {e}")
+                self.source_region = self.source_region or 'us-east-1'
+                self.dest_region = self.dest_region or 'us-east-1'
+                logger.info(f"Using fallback regions - Source: {self.source_region}, Dest: {self.dest_region}")
+        
         try:
-            # Auto-detect bucket regions (like AWS CLI does)
-            logger.info("Auto-detecting bucket regions...")
-            s3_default = self.session.client('s3')
-            
-            # Get source bucket region
-            source_location = s3_default.get_bucket_location(Bucket=source_bucket)
-            self.source_region = source_location.get('LocationConstraint') or 'us-east-1'
-            
-            # Get destination bucket region  
-            dest_location = s3_default.get_bucket_location(Bucket=dest_bucket)
-            self.dest_region = dest_location.get('LocationConstraint') or 'us-east-1'
-            
-            logger.info(f"Source bucket '{source_bucket}' region: {self.source_region}")
-            logger.info(f"Destination bucket '{dest_bucket}' region: {self.dest_region}")
-            
-            # Create S3 clients with correct regions
+            # Create S3 clients with specified/detected regions
             self.source_s3 = self.session.client('s3', region_name=self.source_region)
             self.dest_s3 = self.session.client('s3', region_name=self.dest_region)
             
-            logger.info("S3 clients initialized successfully")
+            logger.info(f"S3 clients initialized - Source: {self.source_region}, Dest: {self.dest_region}")
+            
+            # Test connectivity without requiring GetBucketLocation
+            logger.info("Testing S3 connectivity...")
+            
+            # Test source bucket access
+            try:
+                self.source_s3.head_bucket(Bucket=source_bucket)
+                logger.info(f"✅ Source bucket '{source_bucket}' accessible")
+            except ClientError as e:
+                if e.response['Error']['Code'] in ['301', 'PermanentRedirect']:
+                    logger.warning(f"⚠️ Source bucket region mismatch. Try setting SOURCE_REGION environment variable")
+                    # Try common regions
+                    for region in ['us-west-2', 'us-west-1', 'eu-west-1', 'ap-southeast-1']:
+                        try:
+                            test_s3 = self.session.client('s3', region_name=region)
+                            test_s3.head_bucket(Bucket=source_bucket)
+                            self.source_region = region
+                            self.source_s3 = test_s3
+                            logger.info(f"✅ Found source bucket in region: {region}")
+                            break
+                        except:
+                            continue
+                    else:
+                        raise e
+                else:
+                    raise e
+            
+            # Test destination bucket access
+            try:
+                self.dest_s3.head_bucket(Bucket=dest_bucket)
+                logger.info(f"✅ Destination bucket '{dest_bucket}' accessible")
+            except ClientError as e:
+                if e.response['Error']['Code'] in ['301', 'PermanentRedirect']:
+                    logger.warning(f"⚠️ Destination bucket region mismatch. Try setting DEST_REGION environment variable")
+                    # Try common regions
+                    for region in ['us-west-2', 'us-west-1', 'eu-west-1', 'ap-southeast-1']:
+                        try:
+                            test_s3 = self.session.client('s3', region_name=region)
+                            test_s3.head_bucket(Bucket=dest_bucket)
+                            self.dest_region = region
+                            self.dest_s3 = test_s3
+                            logger.info(f"✅ Found destination bucket in region: {region}")
+                            break
+                        except:
+                            continue
+                    else:
+                        raise e
+                else:
+                    raise e
             
         except ClientError as e:
             logger.error(f"Error initializing S3 clients: {e}")
@@ -224,6 +295,8 @@ def main():
     # Configuration - these should be set via environment variables in GitLab
     SOURCE_BUCKET = os.getenv('SOURCE_BUCKET', 'cert-9898')
     DEST_BUCKET = os.getenv('DEST_BUCKET', 'iteration-technology')
+    SOURCE_REGION = os.getenv('SOURCE_REGION')  # Optional - will auto-detect or use default
+    DEST_REGION = os.getenv('DEST_REGION')     # Optional - will auto-detect or use default
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', '10'))
     DRY_RUN = os.getenv('DRY_RUN', 'false').lower() == 'true'
     
@@ -234,6 +307,8 @@ def main():
     logger.info("=== S3 REPLICATION STARTING ===")
     logger.info(f"Source bucket: {SOURCE_BUCKET}")
     logger.info(f"Destination bucket: {DEST_BUCKET}")
+    logger.info(f"Source region: {SOURCE_REGION or 'auto-detect'}")
+    logger.info(f"Destination region: {DEST_REGION or 'auto-detect'}")
     logger.info(f"Max workers: {MAX_WORKERS}")
     logger.info(f"Dry run: {DRY_RUN}")
     
@@ -241,6 +316,8 @@ def main():
         replicator = S3Replicator(
             source_bucket=SOURCE_BUCKET,
             dest_bucket=DEST_BUCKET,
+            source_region=SOURCE_REGION,
+            dest_region=DEST_REGION,
             aws_access_key=AWS_ACCESS_KEY,
             aws_secret_key=AWS_SECRET_KEY
         )
