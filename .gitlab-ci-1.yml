@@ -4,6 +4,8 @@ stages:
 
 variables:
   PYTHON_VERSION: "3.9"
+  SOURCE_REGION: "us-west-2"  # Set your actual source bucket region
+  DEST_REGION: "us-east-1"    # Set your actual destination bucket region
   MAX_WORKERS: "10"
 
 s3_replication:
@@ -18,6 +20,8 @@ s3_replication:
     - echo "AWS_SECRET_ACCESS_KEY exists:" $(if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then echo "YES"; else echo "NO"; fi)
     - echo "SOURCE_BUCKET:" $SOURCE_BUCKET
     - echo "DEST_BUCKET:" $DEST_BUCKET
+    - echo "SOURCE_REGION:" $SOURCE_REGION
+    - echo "DEST_REGION:" $DEST_REGION
     - python s3_replication.py | tee s3_replication.log
   artifacts:
     paths:
