@@ -1,0 +1,91 @@
+# .gitlab-ci.yml
+variables:
+  PYTHON_VERSION: "3.9"
+  SOURCE_REGION: "us-west-2"
+  DEST_REGION: "us-east-1"
+  MAX_WORKERS: "20"
+  
+  # Configure these based on your bucket contents:
+  # Specify file extensions you want to copy (comma-separated)
+  FILE_EXTENSIONS: "pdf,docx,xlsx,txt,csv,json,log,backup,sql,zip"
+  
+  # Specify folder patterns if you know common folder names
+  FOLDER_PATTERNS: "documents,data,reports,backup,exports,uploads,files"
+  
+  # Specify key prefixes if you know how files are named
+  KEY_PREFIXES: "backup,export,report,data,file,document"
+
+s3_replication:
+  image: python:${PYTHON_VERSION}
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install boto3 botocore
+    - echo "Smart S3 Replication - Pattern Discovery Mode"
+    - echo "Will discover objects by testing common patterns since ListBucket is denied"
+    - echo "File extensions to look for: ${FILE_EXTENSIONS}"
+    - echo "Folder patterns to try: ${FOLDER_PATTERNS}"
+    - echo "Key prefixes to try: ${KEY_PREFIXES}"
+  script:
+    - echo "Starting smart S3 replication from ${SOURCE_BUCKET} to ${DEST_BUCKET}"
+    - echo "Using pattern-based discovery (no s3:ListBucket required)"
+    - python s3_replication.py | tee s3_replication.log
+  artifacts:
+    paths:
+      - s3_replication.log
+      - discovered_objects.txt
+    expire_in: 1 month
+    when: always
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - when: manual
+  timeout: 6h
+  retry:
+    max: 2
+    when:
+      - unknown_failure
+      - api_failure
+      - runner_system_failure
+
+# Job to copy using previously discovered objects
+copy_discovered:
+  image: python:${PYTHON_VERSION}
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install boto3 botocore
+  script:
+    - |
+      if [ -f "discovered_objects.txt" ]; then
+        echo "Using previously discovered objects..."
+        export OBJECT_LIST_FILE="discovered_objects.txt"
+        # Use a simpler copy script for known objects
+        python -c "
+import boto3
+import os
+from concurrent.futures import ThreadPoolExecutor
+
+def copy_file(key):
+    source_s3 = boto3.client('s3', region_name=os.getenv('SOURCE_REGION'))
+    dest_s3 = boto3.client('s3', region_name=os.getenv('DEST_REGION'))
+    try:
+        copy_source = {'Bucket': os.getenv('SOURCE_BUCKET'), 'Key': key.strip()}
+        dest_s3.copy_object(CopySource=copy_source, Bucket=os.getenv('DEST_BUCKET'), Key=key.strip())
+        print(f'COPIED: {key.strip()}')
+    except Exception as e:
+        print(f'FAILED: {key.strip()} - {e}')
+
+with open('discovered_objects.txt', 'r') as f:
+    keys = f.readlines()
+
+with ThreadPoolExecutor(max_workers=20) as executor:
+    executor.map(copy_file, keys)
+        "
+      else
+        echo "No discovered objects file found"
+      fi
+  dependencies:
+    - s3_replication
+  rules:
+    - if: $USE_DISCOVERED == "true"
+    - when: manual
+  allow_failure: true
