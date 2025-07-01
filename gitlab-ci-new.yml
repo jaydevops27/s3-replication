@@ -1,1 +1,37 @@
 
+# .gitlab-ci.yml
+variables:
+  PYTHON_VERSION: "3.9"
+  SOURCE_REGION: "us-west-2"
+  DEST_REGION: "us-east-1"
+  MAX_WORKERS: "10"
+  # Optional: Set this if you have a role that can be assumed for S3 access
+  # ASSUME_ROLE_ARN: "arn:aws:iam::ACCOUNT:role/S3ReplicationRole"
+
+s3_replication:
+  image: python:${PYTHON_VERSION}
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install boto3 botocore awscli
+    - echo "Checking AWS credentials..."
+    - aws sts get-caller-identity || echo "AWS credentials check failed, but continuing..."
+  script:
+    - echo "Starting S3 replication from ${SOURCE_BUCKET} to ${DEST_BUCKET}"
+    - echo "Will try multiple methods to work around s3:ListBucket restrictions"
+    - python s3_replication.py | tee s3_replication.log
+  artifacts:
+    paths:
+      - s3_replication.log
+    expire_in: 1 month
+    when: always
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - when: manual
+  timeout: 6h
+  retry:
+    max: 2
+    when:
+      - unknown_failure
+      - api_failure
+      - runner_system_failure
