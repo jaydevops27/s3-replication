@@ -58,7 +58,6 @@ copy_discovered:
       if [ -f "discovered_objects.txt" ]; then
         echo "Using previously discovered objects..."
         export OBJECT_LIST_FILE="discovered_objects.txt"
-        # Use a simpler copy script for known objects
         python -c "
 import boto3
 import os
